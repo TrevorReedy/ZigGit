@@ -1,6 +1,19 @@
+pub const Color = struct {
+    code: []const u8,
+
+    pub fn apply(self: Color, text: []const u8) void {
+        std.debug.print("{s}{s}\x1b[0m", .{ self.code, text });
+    }
+};
+
+pub const RED = Color{ .code = "\x1b[31m" };
+pub const GREEN = Color{ .code = "\x1b[32m" };
+pub const YELLOW = Color{ .code = "\x1b[33m" };
+
 const std = @import("std");
 const Smartcommit = @import("./smartCommit.zig");
 const SmartAdd = @import("./smartAdd.zig");
+const SmartPreview = @import("./smartPreview.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,6 +33,7 @@ pub fn main() !void {
     var msg: ?[]const u8 = null;
     var do_commit = false;
     var do_add = false;
+    var do_preview = false;
 
     // Parse remaining flags
     var i: usize = 2;
@@ -30,6 +44,9 @@ pub fn main() !void {
         }
         if (std.mem.eql(u8, args[i], "-a")) {
             do_add = true;
+        }
+        if (std.mem.eql(u8, args[i], "-p")) {
+            do_preview = true;
         }
         // If -m is found, set the message flag
         else if (std.mem.eql(u8, args[i], "-m") and i + 1 < args.len) {
@@ -44,14 +61,21 @@ pub fn main() !void {
 
     // Perform the commit if -c was passed
     if (do_commit) {
-        const status = try Smartcommit.commit(alloc, repo_path, msg);
-        std.debug.print("{s}\n", .{status});
+        try Smartcommit.commit(alloc, repo_path, msg);
     }
     if (do_add) {
         //add functionality here
-        _ = try SmartAdd.add(alloc, repo_path);
+        _ = try SmartAdd.add(
+            alloc,
+            repo_path,
+        );
     }
-    if (!do_commit and !do_add) {
-        std.debug.print("No action taken (use -c to commit or -a to Add).\n", .{});
+    if (do_preview) {
+        //add functionality here
+        const sha_buf = try SmartPreview.previewCommit(alloc, repo_path, msg, true);
+        defer alloc.free(sha_buf); // <- IMPORTANT: free what previewCommit returns
+    }
+    if (!do_commit and !do_add and !do_preview) {
+        RED.apply("No action taken (use -c to commit or -a to Add).\n");
     }
 }

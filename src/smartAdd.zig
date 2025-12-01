@@ -1,52 +1,76 @@
+pub const Color = struct {
+    code: []const u8,
+
+    pub fn apply(self: Color, text: []const u8) void {
+        std.debug.print("{s}{s}\x1b[0m", .{ self.code, text });
+    }
+};
+
+pub const RED = Color{ .code = "\x1b[31m" };
+pub const GREEN = Color{ .code = "\x1b[32m" };
+pub const YELLOW = Color{ .code = "\x1b[33m" };
+
 const std = @import("std");
 
 const GitErr = error{ NoGit, BadStatus, GitFailed };
 
-pub fn add(alloc: std.mem.Allocator, repo_path: []const u8) !void {
-    const VERBOSE = true; // flip to false later
+pub fn add(
+    alloc: std.mem.Allocator,
+    repo_path: []const u8,
+) !void {
+    const VERBOSE = false;
 
-    if (VERBOSE) std.debug.print("[add] repo={s}\n", .{repo_path});
-
-    // 0) Prove this is a repo (gives a clear error if not)
     try ensureGitRepo(alloc, repo_path);
-    if (VERBOSE) std.debug.print("[add] ensureGitRepo: OK\n", .{});
+    try runGit(false, alloc, repo_path, &[_][]const u8{
+        "update-index", "-q", "--refresh",
+    }, .{});
 
-    // 1) Refresh index stat info
-    try runGitNoOut(alloc, repo_path, &[_][]const u8{ "update-index", "-q", "--refresh" });
-    if (VERBOSE) std.debug.print("[add] update-index: OK\n", .{});
-
-    // 2) Ask Git what changed (porcelain -z)
-    const raw = try runGit(alloc, repo_path, &[_][]const u8{ "status", "--porcelain", "-z" });
+    const raw = try runGit(true, alloc, repo_path, &[_][]const u8{
+        "status", "--porcelain", "-z",
+    }, .{});
     defer alloc.free(raw);
-
-    if (VERBOSE) {
-        std.debug.print("[add] porcelain(z) bytes={d}\n", .{raw.len});
-        // print human-ish: show escaped with {s} can be ugly due to NULs, so dump hex for visibility
-        std.debug.print("[add] porcelain(hex): ", .{});
-        for (raw) |b| std.debug.print("{X:0>2} ", .{b});
-        std.debug.print("\n", .{});
-    }
 
     var list = try parsePorcelainZ(alloc, raw);
     defer list.deinit();
 
-    if (VERBOSE) {
-        std.debug.print("[add] entries={d}\n", .{list.items.len});
-        for (list.items, 0..) |c, idx| {
-            std.debug.print("[add] {d}: X={c} Y={c} old='{s}' path='{s}'\n", .{ idx, c.x, c.y, c.path_old, c.path });
+    // 1) Preview what would be staged (working tree vs index)
+    const diff = try runGit(
+        true,
+        alloc,
+        repo_path,
+        &[_][]const u8{ "diff", "--minimal", "--color=always" },
+        .{},
+    );
+    defer alloc.free(diff);
+
+    std.debug.print("Git Diff\n{s}\n", .{diff});
+
+    // 2) Ask user
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+    _ = stdout;
+
+    YELLOW.apply("\nStage these changes? (y/N): ");
+
+    var buf: [8]u8 = undefined;
+    const line = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
+    const answer = if (line.len > 0) line[0] else 'n';
+
+    if (answer == 'y' or answer == 'Y') {
+
+        // 3) Actually stage on YES
+        const counts = try stageChanges(alloc, repo_path, list.items);
+        _ = counts;
+        if (VERBOSE) {
+            YELLOW.apply("[add] staged: add={d}, rm={d}\n");
         }
+        GREEN.apply("✓ Changes staged.\n");
+        return;
+    } else {
+        // Do nothing, no reset needed
+        RED.apply("✗ Not staging changes.\n");
+        return;
     }
-
-    // 3) Stage what’s needed (and tell us how many)
-    const counts = try stageChanges(alloc, repo_path, list.items);
-    if (VERBOSE) {
-        std.debug.print("[add] staged: add={d}, rm={d}\n", .{ counts.added, counts.removed });
-    }
-
-    // 4) Show after-status so you can see the effect immediately
-    const after = try runGit(alloc, repo_path, &[_][]const u8{ "status", "--short" });
-    defer alloc.free(after);
-    std.debug.print("[add] git status --short AFTER:\n{s}\n", .{after});
 }
 
 // ----- helpers -----
@@ -109,38 +133,68 @@ fn filterDotfilesSimple(
     try to_rm.appendSlice(keep_rm.items);
 }
 
-fn runGit(alloc: std.mem.Allocator, repo_path: []const u8, tail_argv: []const []const u8) ![]u8 {
+const GitOptions = struct {
+    /// If true, print the underlying `git -C ...` command before running.
+    show_calls: bool = false,
+};
+
+fn runGit(
+    comptime WantOut: bool,
+    alloc: std.mem.Allocator,
+    repo_path: []const u8,
+    tail_argv: []const []const u8,
+    opts: GitOptions,
+) !if (WantOut) []u8 else void {
+    // Optional debug print for the git command
+    if (opts.show_calls) {
+        std.debug.print("CALL: git -C '{s}'", .{repo_path});
+        for (tail_argv) |a| {
+            std.debug.print(" '{s}'", .{a});
+        }
+        std.debug.print("\n", .{});
+    }
+
+    // Build argv = ["git", "-C", repo_path] ++ tail_argv
     var argv = std.ArrayList([]const u8).init(alloc);
     defer argv.deinit();
+
+    try argv.ensureTotalCapacity(3 + tail_argv.len);
     try argv.appendSlice(&[_][]const u8{ "git", "-C", repo_path });
     try argv.appendSlice(tail_argv);
 
+    // Exec
     const res = try std.ChildProcess.exec(.{
         .allocator = alloc,
         .argv = argv.items,
+        .max_output_bytes = 1 << 20,
+        // stdout/stderr default to .Pipe, which is what we want
     });
     defer alloc.free(res.stderr);
 
     switch (res.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("GitFailed: argv={any}\nexit={d}\nstderr:\n{s}\n", .{ argv.items, code, res.stderr });
-                alloc.free(res.stdout);
-                return GitErr.GitFailed;
-            }
+        .Exited => |code| if (code != 0) {
+            std.debug.print(
+                "GitFailed: argv={any}\nexit={d}\nstderr:\n{s}\n",
+                .{ argv.items, code, res.stderr },
+            );
+            alloc.free(res.stdout);
+            return GitErr.GitFailed;
         },
         else => {
-            std.debug.print("GitFailed: abnormal termination. argv={any}\n", .{argv.items});
+            std.debug.print(
+                "GitFailed: abnormal termination. argv={any}\n",
+                .{argv.items},
+            );
             alloc.free(res.stdout);
             return GitErr.GitFailed;
         },
     }
-    return res.stdout;
-}
 
-fn runGitNoOut(alloc: std.mem.Allocator, repo_path: []const u8, tail: []const []const u8) !void {
-    const out = try runGit(alloc, repo_path, tail);
-    defer alloc.free(out);
+    if (WantOut) {
+        return res.stdout;
+    }
+
+    alloc.free(res.stdout);
 }
 
 fn ensureGitRepo(alloc: std.mem.Allocator, path: []const u8) !void {
@@ -235,7 +289,8 @@ fn stageChanges(alloc: std.mem.Allocator, repo_path: []const u8, changes: []cons
         defer argv.deinit();
         try argv.appendSlice(&[_][]const u8{ "add", "--" });
         try argv.appendSlice(to_add.items);
-        try runGitNoOut(alloc, repo_path, argv.items);
+        // try runGitNoOut(alloc, repo_path, argv.items);
+        try runGit(false, alloc, repo_path, argv.items, .{});
         counts.added = to_add.items.len;
     }
 
@@ -244,7 +299,8 @@ fn stageChanges(alloc: std.mem.Allocator, repo_path: []const u8, changes: []cons
         defer argv2.deinit();
         try argv2.appendSlice(&[_][]const u8{ "rm", "--cached", "--" });
         try argv2.appendSlice(to_rm.items);
-        try runGitNoOut(alloc, repo_path, argv2.items);
+        // try runGitNoOut(alloc, repo_path, argv2.items);
+        try runGit(false, alloc, repo_path, argv2.items, .{});
         counts.removed = to_rm.items.len;
     }
 
