@@ -12,3 +12,5 @@ const Color = struct {
 pub const RED = Color{ .code = "\x1b[31m" };
 pub const GREEN = Color{ .code = "\x1b[32m" };
 pub const YELLOW = Color{ .code = "\x1b[33m" };
+pub const CYAN = Color{ .code = "\x1b[36m" };
+pub const WHITE = Color{ .code = "\x1b[97m" };

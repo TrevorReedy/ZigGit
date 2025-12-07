@@ -14,6 +14,7 @@ const std = @import("std");
 const Smartcommit = @import("./smartCommit.zig");
 const SmartAdd = @import("./smartAdd.zig");
 const SmartPreview = @import("./smartPreview.zig");
+const SmartPush = @import("./smartPush.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -33,7 +34,7 @@ pub fn main() !void {
     var msg: ?[]const u8 = null;
     var do_commit = false;
     var do_add = false;
-    var do_preview = false;
+    var do_push = false;
 
     // Parse remaining flags
     var i: usize = 2;
@@ -46,8 +47,9 @@ pub fn main() !void {
             do_add = true;
         }
         if (std.mem.eql(u8, args[i], "-p")) {
-            do_preview = true;
+            do_push = true;
         }
+
         // If -m is found, set the message flag
         else if (std.mem.eql(u8, args[i], "-m") and i + 1 < args.len) {
             msg = args[i + 1];
@@ -70,12 +72,10 @@ pub fn main() !void {
             repo_path,
         );
     }
-    if (do_preview) {
-        //add functionality here
-        const sha_buf = try SmartPreview.previewCommit(alloc, repo_path, msg, true);
-        defer alloc.free(sha_buf); // <- IMPORTANT: free what previewCommit returns
+    if (do_push) {
+        _ = try SmartPush.push(alloc, repo_path);
     }
-    if (!do_commit and !do_add and !do_preview) {
+    if (!do_commit and !do_add and !do_push) {
         RED.apply("No action taken (use -c to commit or -a to Add).\n");
     }
 }

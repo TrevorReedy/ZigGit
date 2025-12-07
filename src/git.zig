@@ -2,19 +2,6 @@ const std = @import("std");
 
 pub const Allocator = std.mem.Allocator;
 
-/// Shared git error set for all modules
-// pub const GitErr = error{
-//     NoGit,
-//     BadStatus,
-//     GitFailed,
-//     NoUpstream,
-//     OutOfMemory,
-//     InputOutput,
-//     SystemResources,
-//     OperationAborted,
-//     BrokenPipe,
-//     Unexpected,
-// };
 pub const GitErr = anyerror;
 /// Options for running git
 pub const GitOptions = struct {
@@ -22,9 +9,6 @@ pub const GitOptions = struct {
     show_calls: bool = false,
 };
 
-/// Run `git -C <repo_path> <tail_argv...>`.
-/// If WantOut = true: returns stdout (caller must free).
-/// If WantOut = false: returns void.
 pub fn runGit(
     comptime WantOut: bool,
     alloc: Allocator,
@@ -107,10 +91,6 @@ pub fn ensureRepo(alloc: Allocator, path: []const u8) GitErr!void {
     }
     if (!ok) return GitErr.NoGit;
 }
-
-// ─────────────────────────────────────────────
-// High-level helpers used by smartAdd/Commit
-// ─────────────────────────────────────────────
 
 /// Refresh the index: `git update-index -q --refresh`
 pub fn updateIndex(alloc: Allocator, repo_path: []const u8) GitErr!void {
@@ -229,4 +209,50 @@ pub fn aheadBehind(alloc: Allocator, repo_path: []const u8) GitErr!AheadBehind {
     const ahead = std.fmt.parseInt(usize, it.next() orelse "0", 10) catch return GitErr.GitFailed;
 
     return AheadBehind{ .ahead = ahead, .behind = behind };
+}
+/// Get canonical repo root: `git rev-parse --show-toplevel`
+pub fn getRepoRoot(alloc: Allocator, repo_path: []const u8) GitErr![]u8 {
+    const res = try std.ChildProcess.exec(.{
+        .allocator = alloc,
+        .argv = &[_][]const u8{
+            "git", "-C", repo_path, "rev-parse", "--show-toplevel",
+        },
+        .max_output_bytes = 1 << 16,
+    });
+    defer {
+        alloc.free(res.stdout);
+        alloc.free(res.stderr);
+    }
+
+    switch (res.term) {
+        .Exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+
+    const trimmed = std.mem.trimRight(u8, res.stdout, "\r\n");
+    return alloc.dupe(u8, trimmed) catch return error.OutOfMemory;
+}
+
+/// Get current branch: `git rev-parse --abbrev-ref HEAD`
+/// If HEAD is detached, this returns "HEAD".
+pub fn getCurrentBranch(alloc: Allocator, repo_path: []const u8) GitErr![]u8 {
+    const res = try std.ChildProcess.exec(.{
+        .allocator = alloc,
+        .argv = &[_][]const u8{
+            "git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD",
+        },
+        .max_output_bytes = 1 << 16,
+    });
+    defer {
+        alloc.free(res.stdout);
+        alloc.free(res.stderr);
+    }
+
+    switch (res.term) {
+        .Exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+
+    const trimmed = std.mem.trimRight(u8, res.stdout, "\r\n");
+    return alloc.dupe(u8, trimmed) catch return error.OutOfMemory;
 }
