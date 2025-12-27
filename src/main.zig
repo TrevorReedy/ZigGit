@@ -1,22 +1,18 @@
-pub const Color = struct {
-    code: []const u8,
-
-    pub fn apply(self: Color, text: []const u8) void {
-        std.debug.print("{s}{s}\x1b[0m", .{ self.code, text });
-    }
-};
-
-pub const RED = Color{ .code = "\x1b[31m" };
-pub const GREEN = Color{ .code = "\x1b[32m" };
-pub const YELLOW = Color{ .code = "\x1b[33m" };
-
 const std = @import("std");
+const git = @import("./git.zig");
 const Smartcommit = @import("./smartCommit.zig");
 const SmartAdd = @import("./smartAdd.zig");
 const SmartPreview = @import("./smartPreview.zig");
 const SmartPush = @import("./smartPush.zig");
+const COLOR = @import("./COLOR.zig");
+
+const Platform = @import("platform.zig").Platform;
 
 pub fn main() !void {
+    const stdout = std.io.getStdOut().writer();
+
+    COLOR.CYAN.apply(Platform.name);
+    try stdout.print("\n", .{});
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
@@ -35,6 +31,8 @@ pub fn main() !void {
     var do_commit = false;
     var do_add = false;
     var do_push = false;
+    var os_check = false;
+    _ = os_check;
 
     // Parse remaining flags
     var i: usize = 2;
@@ -76,6 +74,6 @@ pub fn main() !void {
         _ = try SmartPush.push(alloc, repo_path);
     }
     if (!do_commit and !do_add and !do_push) {
-        RED.apply("No action taken (use -c to commit or -a to Add).\n");
+        COLOR.RED.apply("No action taken (use -c to commit or -a to Add).\n");
     }
 }

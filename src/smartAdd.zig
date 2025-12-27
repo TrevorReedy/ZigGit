@@ -1,9 +1,12 @@
 const std = @import("std");
 const COLOR = @import("./COLOR.zig");
 const git = @import("./git.zig");
+const PLATFORM = @import("./platform.zig").Platform;
 
 const Allocator = std.mem.Allocator;
 pub const AddErr = git.GitErr;
+
+const stdout = std.io.getStdOut().writer();
 
 fn hasAnyChanges(alloc: Allocator, repo_path: []const u8) AddErr!bool {
     const raw = try git.statusPorcelainZ(alloc, repo_path);
@@ -12,7 +15,6 @@ fn hasAnyChanges(alloc: Allocator, repo_path: []const u8) AddErr!bool {
 }
 
 fn askYesNoDefaultNo(prompt: []const u8) bool {
-    const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
     stdout.print("{s} [y/N]: ", .{prompt}) catch {};
@@ -27,7 +29,6 @@ fn askYesNoDefaultNo(prompt: []const u8) bool {
 }
 
 fn printStatusPorcelain(raw: []const u8) void {
-    const stdout = std.io.getStdOut().writer();
 
     // porcelain -z: entries separated by NUL, path(s) follow status
     var i: usize = 0;
@@ -58,20 +59,32 @@ pub fn add(
 
     // 2) Check if anything to add
     if (!try hasAnyChanges(alloc, repo_path)) {
-        COLOR.YELLOW.apply("No changes to add.\n");
+        if (PLATFORM.supports_color) {
+            COLOR.YELLOW.apply("No changes to add.\n");
+        } else {
+            try stdout.print("No changes to add.\n", .{});
+        }
+
         return;
     }
 
-    const stdout = std.io.getStdOut().writer();
-
     // 3) Show diff and status
-    COLOR.YELLOW.apply("Git Diff\n");
+    if (PLATFORM.supports_color) {
+        COLOR.YELLOW.apply("Git Diff\n");
+    } else {
+        try stdout.print("Git Diff\n", .{});
+    }
+
     const diff = try git.diffUnstaged(alloc, repo_path);
     defer alloc.free(diff);
 
     const diff_trimmed = std.mem.trimRight(u8, diff, "\r\n");
     if (diff_trimmed.len == 0) {
-        COLOR.YELLOW.apply("(No unstaged diff output; changes may be untracked files only.)\n");
+        if (PLATFORM.supports_color) {
+            COLOR.YELLOW.apply("(No unstaged diff output; changes may be untracked files only.)\n");
+        } else {
+            try stdout.print("(No unstaged diff output; changes may be untracked files only.)\n", .{});
+        }
     } else {
         _ = stdout.print("{s}\n", .{diff_trimmed}) catch {};
     }
@@ -80,18 +93,33 @@ pub fn add(
     defer alloc.free(status_raw);
 
     if (status_raw.len != 0) {
-        COLOR.YELLOW.apply("\nStatus (including untracked):\n");
+        if (PLATFORM.supports_color) {
+            COLOR.YELLOW.apply("\nStatus (including untracked):\n");
+        } else {
+            try stdout.print("\nStatus (including untracked):\n", .{});
+        }
+
         printStatusPorcelain(status_raw);
     }
 
     // 4) Ask user
     const yes = askYesNoDefaultNo("Stage ALL these changes with `git add -A`?");
     if (!yes) {
-        COLOR.RED.apply("✗ Not staging changes.\n");
+        if (PLATFORM.supports_color) {
+            COLOR.RED.apply("✗ Not staging changes.\n");
+        } else {
+            try stdout.print("✗ Not staging changes.\n", .{});
+        }
+
         return;
     }
 
     // 5) Actually stage
     try git.addAll(alloc, repo_path);
-    COLOR.GREEN.apply("✓ Changes staged with git add -A.\n");
+
+    if (PLATFORM.supports_color) {
+        COLOR.GREEN.apply("✓ Changes staged with git add -A.\n");
+    } else {
+        try stdout.print("✓ Changes staged with git add -A.\n", .{});
+    }
 }

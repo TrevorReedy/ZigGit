@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Allocator = std.mem.Allocator;
 
@@ -256,3 +257,11 @@ pub fn getCurrentBranch(alloc: Allocator, repo_path: []const u8) GitErr![]u8 {
     const trimmed = std.mem.trimRight(u8, res.stdout, "\r\n");
     return alloc.dupe(u8, trimmed) catch return error.OutOfMemory;
 }
+// pub fn os_check() []const u8 {
+//     return switch (builtin.target.os.tag) {
+//         .windows => "Target OS: Windows\n",
+//         .linux => "Target OS: Linux\n",
+//         .macos => "Target OS: MacOS\n",
+//         else => "Target OS: Unknown or unsupported\n",
+//     };
+// }
